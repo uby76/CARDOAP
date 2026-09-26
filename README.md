@@ -1,4 +1,3 @@
-```markdown
 # CARDOAP
 
 CARDOAP integrates the CARD protein homolog database with the ARGs-OAP framework for short-read ARG profiling and cell-normalized quantification.
