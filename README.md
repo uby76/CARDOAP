@@ -2,7 +2,7 @@
 
 CARDOAP integrates the CARD protein homolog database with the ARGs-OAP framework for short-read ARG profiling and cell-normalized quantification.
 
-The current database contains **6,059 CARD protein homolog reference sequences**. CARDOAP retains the original two-stage ARGs-OAP workflow and KO30-based cell normalization, while replacing the default SARG database with CARD.
+The current database contains **6,059 CARD protein homolog reference sequences**. CARDOAP retains the original two-stage ARGs-OAP workflow and KO30-based cell normalization, while replacing the default SARG database with CARD. CARD references associated with multiple drug classes were individually checked and validated to ensure consistent class assignment and to avoid duplicate counting during quantification. The database also includes **128 broad-spectrum multidrug efflux resistance genes**, which were specifically reviewed and classified as multidrug resistance determinants.
 
 ## Installation
 
