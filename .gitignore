@@ -1,0 +1,12 @@
+*.dmnd
+*.phr
+*.pin
+*.psq
+*.pdb
+*.pjs
+*.pot
+*.ptf
+*.pto
+
+test_output/
+.DS_Store
