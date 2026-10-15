@@ -147,9 +147,17 @@ database/
 
 This optional module quantifies ARG ORFs predicted from MAGs. It uses the **same samples'** CARDOAP Stage 1 `nCell` estimates, but its MAG ORF counts are a separate result from the read-level `normalized_cell.*` tables above. Do not add the two totals: many reads can support both analyses.
 
-1. Predict MAG ORFs and retain paired nucleotide (`representative.fna`) and protein (`representative.faa`) FASTA files with identical representative ORF IDs. If ORFs are clustered, retain the representative-to-original-ORF/MAG table. The RGI call below annotates representatives; cluster members are not independently validated by RGI.
-2. Run CARD RGI main on the representative proteins using a local CARD database, and keep only `Perfect` and `Strict` matches. Preserve efflux pump hits unless a separate, documented sensitivity analysis removes them.
-3. Map each sample's original, cleaned paired reads to **one combined nucleotide reference** of the selected MAG ORFs. Count CIGAR `M`, `=`, and `X` bases of primary mapped read mates per ORF. Divide by ORF length to obtain mean read-base depth, then by that sample's CARDOAP Stage 1 `nCell` to obtain copies/cell:
+```text
+MAG FASTA → Prodigal ORFs → unique MAG__ORF IDs → group-aware clustering + membership
+          → representative proteins → CARD RGI Perfect/Strict → nucleotide ARG ORF reference
+same cleaned reads → CARDOAP read annotation → sample nCell
+same cleaned reads + nucleotide ARG ORF reference → aligned bp / ORF length / nCell
+```
+
+1. Predict ORFs separately for every MAG with Prodigal `-p meta`, prefix each original Prodigal ORF ID with its MAG ID, and retain the original ORF–MAG mapping.
+2. Cluster nucleotide ORFs at 95% identity and 90% shorter-sequence coverage, retaining every representative–original ORF–MAG link. For the existing HumGut/NonHumGut project, use its group-aware procedure: cluster within each group, compare the two groups bidirectionally, then recluster Shared representatives. The recorded CD-HIT-EST parameters are `-c 0.95 -aS 0.90 -G 1 -g 1 -r 1 -n 10 -d 0 -l 10`; the bidirectional `cd-hit-est-2d` calls additionally use `-s2 0.0 -S2 999999`. The [recorded implementation](https://github.com/uby76/HumandnohumARGs/blob/main/scripts/01_humgut_orf_card_workflow.py) is the upstream source; CARDOAP imports its result without changing the clustering algorithm.
+3. Run CARD RGI main on the representative proteins using a local CARD database, and keep only `Perfect` and `Strict` matches. Preserve efflux pump hits unless a separate, documented sensitivity analysis removes them.
+4. Map each sample's original, cleaned paired reads to **one combined nucleotide reference** of the selected MAG ORFs. Count CIGAR `M`, `=`, and `X` bases of primary mapped read mates per ORF. Divide by ORF length to obtain mean read-base depth, then by that sample's CARDOAP Stage 1 `nCell` to obtain copies/cell:
 
 ```text
 MAG_ORF_copies_per_cell[sample, ORF]
@@ -160,11 +168,19 @@ This preserves the original [HumandnohumARGs](https://github.com/uby76/Humandnoh
 
 ### Run the MAG module
 
-Install `rgi`, `bowtie2`, and `samtools`; use the same CARD/RGI release for all MAGs. First run RGI main on the representative proteins (repeat or parallelize for chunks if needed):
+Install Prodigal, CD-HIT, `rgi`, Bowtie2, and samtools; use the same CARD/RGI release for all MAGs. First complete the ORF prediction, unique-ID assignment, and group-aware clustering in HumandnohumARGs. Its `reference/` directory contains `Human-specific.fna/.faa`, `NonHuman-specific.fna/.faa`, `Shared.fna/.faa`, and `representative_to_original_ORF_MAG.tsv.gz`. Import and validate these outputs:
+
+```bash
+python3 scripts/import_mag_orf_reference.py \
+  --upstream-reference-dir /path/to/07_HumGut_ORF_CARD/reference \
+  --output-dir mag_orfs
+```
+
+The importer checks that each nucleotide representative has the same protein ID, that original ORF IDs are unique, and that every representative has its original ORF/MAG links. It writes combined `mag_orfs/representative.fna`, `mag_orfs/representative.faa`, and `mag_orfs/representative_to_original_ORF_MAG.tsv.gz` files. Next run RGI main on the representative proteins (repeat or parallelize for chunks if needed):
 
 ```bash
 rgi main \
-  --input_sequence representative.faa \
+  --input_sequence mag_orfs/representative.faa \
   --output_file mag_rgi/CARD_RGI \
   --input_type protein \
   --alignment_tool DIAMOND \
@@ -175,9 +191,9 @@ Make the nucleotide reference. `--rgi-dir` finds all `CARD_RGI.txt` files below 
 
 ```bash
 python3 scripts/mag_orf_copies_per_cell.py prepare \
-  --representative-fna representative.fna \
+  --representative-fna mag_orfs/representative.fna \
   --rgi-dir mag_rgi \
-  --membership-table representative_to_original_ORF_MAG.tsv.gz \
+  --membership-table mag_orfs/representative_to_original_ORF_MAG.tsv.gz \
   --output-dir mag_arg_reference
 
 bowtie2-build mag_arg_reference/CARD_MAG_ORFs.fna mag_arg_reference/index
