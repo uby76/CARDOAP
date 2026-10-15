@@ -1,5 +1,39 @@
 # CARDOAP
 
+## Complete workflow
+
+```mermaid
+flowchart TD
+    MAG["MAG FASTA"] --> ORF["Prodigal: predict ORFs"]
+    ORF --> IDs["Assign unique MAG + original ORF IDs"]
+    IDs --> Within["CD-HIT-EST within Human and NonHuman groups: 95% identity, 90% coverage"]
+    Within --> Cross["Bidirectional cross-group comparison"]
+    Cross --> Shared["Recluster Shared ORFs"]
+    Shared --> Links["Keep representative ORF to original ORF to MAG links"]
+    Shared --> Protein["Representative ORF proteins"]
+    Protein --> RGI["CARD RGI main"]
+    RGI --> Strict["Keep Perfect and Strict hits"]
+    Strict --> DNA["Selected representative ORF DNA reference"]
+
+    Reads["Clean paired reads from each sample"] --> Stage1["CARDOAP Stage 1: candidate reads and KO30 markers"]
+    Stage1 --> NCell["Sample nCell"]
+    Stage1 --> Stage2["CARDOAP Stage 2: CARD read annotation"]
+    Stage2 --> ReadResult["Read-level CARD copies per cell"]
+
+    Reads --> Mapping["Bowtie2: map reads to selected MAG ARG ORFs"]
+    DNA --> Mapping
+    Mapping --> Bases["Sum CIGAR M, =, X bases per representative ORF"]
+    Bases --> Length["Divide by ORF length: mean read-base depth"]
+    Length --> Normalize["Divide by the same sample's nCell"]
+    NCell --> Normalize
+    Normalize --> MAGResult["Sample by representative MAG ARG ORF copies per cell"]
+    Links --> Assignment["Trace original ORF IDs and MAG IDs"]
+    MAGResult --> Assignment
+    Assignment --> MAGSummary["Per-MAG summary when assignment is unambiguous"]
+```
+
+Read-level and MAG ORF results are reported separately. A representative ORF shared by multiple MAGs remains unassigned at the MAG level; its abundance is not copied to each MAG.
+
 CARDOAP integrates the CARD protein homolog database with the ARGs-OAP framework for short-read ARG profiling and cell-normalized quantification.
 
 The current database contains **6,059 CARD protein homolog reference sequences**. CARDOAP retains the original two-stage ARGs-OAP workflow and KO30-based cell normalization, while replacing the default SARG database with CARD. CARD references associated with multiple drug classes were individually checked and validated to ensure consistent class assignment and to avoid duplicate counting during quantification. The database also includes **128 broad-spectrum multidrug efflux resistance genes**, which were specifically reviewed and classified as multidrug resistance determinants.
@@ -219,26 +253,6 @@ For HumGut/NonHumGut analysis, the membership table supplies `Source_category` f
 An RGI result belongs to the **representative ORF**, whereas `CARD_MAG_ORF_membership.tsv` traces that representative to original MAG ORF IDs. If one representative contains multiple original ORFs, its read-based abundance cannot be copied to each original ORF without double counting. When all members belong to one MAG, the abundance can be included in that MAG's summary, but no separate value is assigned to each original ORF. When members span multiple MAGs, `MAG_ID` is blank and the abundance remains in the unassigned-cluster total. A per-original-gene estimate requires a separate mapping analysis with a reference and uniquely assignable reads at that resolution.
 
 These results are named MAG ORF copies/cell. They are not equivalent to CARDOAP's read-level CARD reference copies/cell because the reference sequences and assignment procedure differ. `nCell` is a cell-equivalent denominator, not a 16S read count. Resfams-only candidates, if assessed later, should be reported separately from RGI Perfect/Strict ORFs.
-
-## Workflow
-
-```text
-Short reads
-    ↓
-DIAMOND BLASTX
-    ↓
-Candidate ARG-like reads
-    ↓
-NCBI BLASTX
-    ↓
-CARD ARG identification
-    ↓
-Reference-length correction
-    ↓
-KO30 single-copy marker normalization
-    ↓
-ARG copies per cell
-```
 
 ## Notes
 
