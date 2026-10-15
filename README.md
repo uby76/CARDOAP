@@ -1,57 +1,5 @@
 # CARDOAP
 
-## Complete workflow
-
-```mermaid
-flowchart TB
-    Reads["Clean paired reads per sample"]
-    CARDDB["CARDOAP CARD protein reference: 6,059 sequences"]
-    RGIDB["CARD RGI model database"]
-
-    subgraph ReadWorkflow["Existing CARDOAP read workflow - unchanged"]
-        Stage1["Stage 1: DIAMOND screening and KO30 cell estimate"]
-        Stage2["Stage 2: BLASTX CARD annotation"]
-        ReadOutput["Read-level ARG copies per cell"]
-        NCell["Sample nCell"]
-        Stage1 --> Stage2 --> ReadOutput
-        Stage1 --> NCell
-        NCell --> ReadOutput
-    end
-
-    subgraph MAGWorkflow["Optional ARG analysis across all MAGs"]
-        MAGs["All MAG nucleotide FASTA files"]
-        Prodigal["Predict ORFs with Prodigal"]
-        UniqueID["Assign unique original ORF and MAG IDs"]
-        Cluster["Pool all ORFs; cluster at 95% identity and 90% coverage"]
-        Membership["Save representative ORF / original ORF / MAG mapping"]
-        RGI["CARD RGI main on representative proteins"]
-        Select["Keep Perfect and Strict representative ORFs"]
-        ARGRef["Build selected ORF nucleotide reference"]
-        Map["Bowtie2: map the same reads to selected ORFs"]
-        Depth["CIGAR aligned bases / ORF length"]
-        Normalize["ORF depth / sample nCell"]
-        ORFOutput["Sample by representative ARG ORF copies per cell"]
-        MAGOutput["Per-MAG summary only for uniquely assignable clusters"]
-        Ambiguous["Cross-MAG clusters remain unassigned"]
-        MAGs --> Prodigal --> UniqueID --> Cluster
-        Cluster --> Membership
-        Cluster --> RGI --> Select --> ARGRef --> Map --> Depth --> Normalize --> ORFOutput
-        Membership --> MAGOutput
-        ORFOutput --> MAGOutput
-        Membership --> Ambiguous
-        ORFOutput --> Ambiguous
-    end
-
-    Reads --> Stage1
-    CARDDB --> Stage1
-    CARDDB --> Stage2
-    RGIDB --> RGI
-    Reads --> Map
-    NCell --> Normalize
-```
-
-Read-level and MAG ORF results are reported separately. A representative ORF shared by multiple MAGs remains unassigned at the MAG level; its abundance is not copied to each MAG.
-
 CARDOAP integrates the CARD protein homolog database with the ARGs-OAP framework for short-read ARG profiling and cell-normalized quantification.
 
 The current database contains **6,059 CARD protein homolog reference sequences**. CARDOAP retains the original two-stage ARGs-OAP workflow and KO30-based cell normalization, while replacing the default SARG database with CARD. CARD references associated with multiple drug classes were individually checked and validated to ensure consistent class assignment and to avoid duplicate counting during quantification. The database also includes **128 broad-spectrum multidrug efflux resistance genes**, which were specifically reviewed and classified as multidrug resistance determinants.
