@@ -46,6 +46,12 @@ bash scripts/run_test.sh
 
 The script automatically performs database indexing, Stage 1 screening, Stage 2 ARG identification, and abundance normalization.
 
+`test/` contains example reads for the original CARDOAP workflow. `tests/` contains two small synthetic checks for the optional MAG module: ORF-to-MAG traceability and the copies-per-cell calculation. They do not require Prodigal, CD-HIT, Bowtie2, or samtools to be installed:
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
 ## Run CARDOAP on your own reads
 
 Prepare paired-end reads using names such as:
