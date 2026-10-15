@@ -143,6 +143,64 @@ database/
 
 `CARD_OAP_full_6059_annotation.csv` contains detailed CARD annotation metadata.
 
+## MAG ARG module: CARD RGI + CARDOAP nCell
+
+This optional module quantifies ARG ORFs predicted from MAGs. It uses the **same samples'** CARDOAP Stage 1 `nCell` estimates, but its MAG ORF counts are a separate result from the read-level `normalized_cell.*` tables above. Do not add the two totals: many reads can support both analyses.
+
+1. Predict MAG ORFs and retain paired nucleotide (`representative.fna`) and protein (`representative.faa`) FASTA files with identical representative ORF IDs. If ORFs are clustered, retain the representative-to-original-ORF/MAG table. The RGI call below annotates representatives; cluster members are not independently validated by RGI.
+2. Run CARD RGI main on the representative proteins using a local CARD database, and keep only `Perfect` and `Strict` matches. Preserve efflux pump hits unless a separate, documented sensitivity analysis removes them.
+3. Map each sample's original, cleaned paired reads to **one combined nucleotide reference** of the selected MAG ORFs. Count CIGAR `M`, `=`, and `X` bases of primary mapped read mates per ORF. Divide by ORF length to obtain mean read-base depth, then by that sample's CARDOAP Stage 1 `nCell` to obtain copies/cell:
+
+```text
+MAG_ORF_copies_per_cell[sample, ORF]
+  = total_aligned_bp[sample, ORF] / ORF_length_bp[ORF] / nCell[sample]
+```
+
+This preserves the original [HumandnohumARGs](https://github.com/uby76/HumandnohumARGs) calculation: Bowtie2 default end-to-end alignment with `--seed 0`, excluding unmapped, secondary and supplementary alignments (SAM flag mask `2308`), with no MAPQ threshold. R1 and R2 contribute separately, so overlapping mate bases count twice. PCR duplicates are not explicitly removed. These are read-base depths, not fragment-corrected depths.
+
+### Run the MAG module
+
+Install `rgi`, `bowtie2`, and `samtools`; use the same CARD/RGI release for all MAGs. First run RGI main on the representative proteins (repeat or parallelize for chunks if needed):
+
+```bash
+rgi main \
+  --input_sequence representative.faa \
+  --output_file mag_rgi/CARD_RGI \
+  --input_type protein \
+  --alignment_tool DIAMOND \
+  --local --clean --data wgs
+```
+
+Make the nucleotide reference. `--rgi-dir` finds all `CARD_RGI.txt` files below the given directory; `--orf-metadata` is optional and may contain `ORF_ID`, `Source_category`, and `representative_MAG_ID` columns.
+
+```bash
+python3 scripts/mag_orf_copies_per_cell.py prepare \
+  --representative-fna representative.fna \
+  --rgi-dir mag_rgi \
+  --output-dir mag_arg_reference
+
+bowtie2-build mag_arg_reference/CARD_MAG_ORFs.fna mag_arg_reference/index
+```
+
+Use the `sample` and `nCell` columns from `output/metadata.txt` produced by CARDOAP Stage 1. Sample IDs must match exactly. Run once per sample; use a job array for large cohorts. The same cleaned reads should be used for both CARDOAP Stage 1 and MAG ORF mapping.
+
+```bash
+python3 scripts/mag_orf_copies_per_cell.py quantify \
+  --reference-dir mag_arg_reference \
+  --cell-metadata output/metadata.txt \
+  --sample sample1 \
+  --read-one clean_reads/sample1_R1.fastq.gz \
+  --read-two clean_reads/sample1_R2.fastq.gz \
+  --threads 8 \
+  --output-dir mag_arg_results/sample1
+```
+
+`mag_arg_results/sample1/sample1.CARD_MAG_ORF_copies_per_cell.tsv` contains per-ORF aligned bases, estimated gene copies, and copies/cell. The companion `CARD_MAG_summary.tsv` contains the sum of selected MAG ORFs for that sample. `mag_arg_reference/CARD_MAG_ORF_annotation.tsv` records the RGI evidence and optional MAG source category. To reuse an existing BAM mapped to **this exact ORF reference**, pass `--bam sample.bam` instead of the read arguments.
+
+For HumGut/NonHumGut analysis, provide `--orf-metadata representative_ORF_metadata.tsv` to `prepare`. The optional table should have one row per representative ORF and columns `ORF_ID`, `Source_category`, and, if available, `representative_MAG_ID`. Quantify against the same combined reference, then split the resulting ORF table by `Source_category`. Do not map the source groups separately.
+
+These results are named MAG ORF copies/cell. They are not equivalent to CARDOAP's read-level CARD reference copies/cell because the reference sequences and assignment procedure differ. `nCell` is a cell-equivalent denominator, not a 16S read count. Resfams-only candidates, if assessed later, should be reported separately from RGI Perfect/Strict ORFs.
+
 ## Workflow
 
 ```text
@@ -165,7 +223,7 @@ ARG copies per cell
 
 ## Notes
 
-CARDOAP does not modify the core ARGs-OAP algorithm. It replaces the default SARG reference database with CARD protein homolog references while retaining the original ARGs-OAP search, filtering, and normalization framework.
+The read-level CARDOAP workflow does not modify the core ARGs-OAP algorithm. It replaces the default SARG reference database with CARD protein homolog references while retaining the original ARGs-OAP search, filtering, and normalization framework. The optional MAG module above uses its `nCell` output as the denominator for an independent ORF read-mapping analysis.
 
 CARD references can be associated with multiple drug classes, AMR gene families, or resistance mechanisms. Reference-, ARO-, and ARG-level results are therefore recommended for primary quantitative analyses.
 
