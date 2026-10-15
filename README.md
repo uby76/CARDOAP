@@ -171,12 +171,13 @@ rgi main \
   --local --clean --data wgs
 ```
 
-Make the nucleotide reference. `--rgi-dir` finds all `CARD_RGI.txt` files below the given directory; `--orf-metadata` is optional and may contain `ORF_ID`, `Source_category`, and `representative_MAG_ID` columns.
+Make the nucleotide reference. `--rgi-dir` finds all `CARD_RGI.txt` files below the given directory. If representative ORFs were clustered, supply their original-ORF/MAG mapping with `--membership-table`. The HumandnohumARGs workflow produces `representative_to_original_ORF_MAG.tsv.gz` with the required `final_representative_ORF`, `original_ORF`, and `MAG_ID` columns. `--orf-metadata` is optional and may contain `ORF_ID`, `Source_category`, and `representative_MAG_ID` columns.
 
 ```bash
 python3 scripts/mag_orf_copies_per_cell.py prepare \
   --representative-fna representative.fna \
   --rgi-dir mag_rgi \
+  --membership-table representative_to_original_ORF_MAG.tsv.gz \
   --output-dir mag_arg_reference
 
 bowtie2-build mag_arg_reference/CARD_MAG_ORFs.fna mag_arg_reference/index
@@ -195,9 +196,11 @@ python3 scripts/mag_orf_copies_per_cell.py quantify \
   --output-dir mag_arg_results/sample1
 ```
 
-`mag_arg_results/sample1/sample1.CARD_MAG_ORF_copies_per_cell.tsv` contains per-ORF aligned bases, estimated gene copies, and copies/cell. The companion `CARD_MAG_summary.tsv` contains the sum of selected MAG ORFs for that sample. `mag_arg_reference/CARD_MAG_ORF_annotation.tsv` records the RGI evidence and optional MAG source category. To reuse an existing BAM mapped to **this exact ORF reference**, pass `--bam sample.bam` instead of the read arguments.
+`mag_arg_results/sample1/sample1.CARD_MAG_ORF_copies_per_cell.tsv` contains sample × representative ARG ORF aligned bases, estimated gene copies, copies/cell, and the MAG ID when it can be assigned to one MAG. `sample1.CARD_MAG_by_MAG.tsv` sums only representative ORFs whose cluster maps to one MAG. `sample1.CARD_MAG_summary.tsv` separates the assigned and unassigned copies/cell. `mag_arg_reference/CARD_MAG_ORF_annotation.tsv` records the RGI evidence; `CARD_MAG_ORF_membership.tsv` records every original ORF ID and MAG ID associated with each selected representative. To reuse an existing BAM mapped to **this exact ORF reference**, pass `--bam sample.bam` instead of the read arguments.
 
-For HumGut/NonHumGut analysis, provide `--orf-metadata representative_ORF_metadata.tsv` to `prepare`. The optional table should have one row per representative ORF and columns `ORF_ID`, `Source_category`, and, if available, `representative_MAG_ID`. Quantify against the same combined reference, then split the resulting ORF table by `Source_category`. Do not map the source groups separately.
+For HumGut/NonHumGut analysis, the membership table supplies `Source_category` from its `category` column. Alternatively, provide `--orf-metadata representative_ORF_metadata.tsv` with one row per representative ORF and columns `ORF_ID`, `Source_category`, and, if available, `representative_MAG_ID`. Quantify against the same combined reference, then split the resulting ORF table by `Source_category`. Do not map the source groups separately.
+
+An RGI result belongs to the **representative ORF**, whereas `CARD_MAG_ORF_membership.tsv` traces that representative to original MAG ORF IDs. If one representative contains multiple original ORFs, its read-based abundance cannot be copied to each original ORF without double counting. When all members belong to one MAG, the abundance can be included in that MAG's summary, but no separate value is assigned to each original ORF. When members span multiple MAGs, `MAG_ID` is blank and the abundance remains in the unassigned-cluster total. A per-original-gene estimate requires a separate mapping analysis with a reference and uniquely assignable reads at that resolution.
 
 These results are named MAG ORF copies/cell. They are not equivalent to CARDOAP's read-level CARD reference copies/cell because the reference sequences and assignment procedure differ. `nCell` is a cell-equivalent denominator, not a 16S read count. Resfams-only candidates, if assessed later, should be reported separately from RGI Perfect/Strict ORFs.
 

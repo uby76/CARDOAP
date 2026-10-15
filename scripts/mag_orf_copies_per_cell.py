@@ -7,6 +7,7 @@ primary mapped reads, CIGAR M/= /X bases, and mates counted separately.
 
 import argparse
 import csv
+import gzip
 import math
 import re
 import subprocess
@@ -18,12 +19,18 @@ CIGAR_RE = re.compile(r"(\d+)([MIDNSHP=X])")
 EXCLUDED_FLAGS = 4 | 256 | 2048
 
 
-def read_table(path):
-    with Path(path).open(newline="") as handle:
-        reader = csv.DictReader(handle, delimiter="\t" if str(path).endswith(".tsv") or str(path).endswith(".txt") else ",")
+def table_rows(path):
+    path = Path(path)
+    opener = gzip.open if path.suffix == ".gz" else open
+    with opener(path, "rt", newline="") as handle:
+        reader = csv.DictReader(handle, delimiter="\t" if ".tsv" in path.suffixes or ".txt" in path.suffixes else ",")
         if not reader.fieldnames:
             raise ValueError(f"Empty table: {path}")
-        return list(reader)
+        yield from reader
+
+
+def read_table(path):
+    return list(table_rows(path))
 
 
 def write_table(path, fields, rows):
@@ -83,6 +90,30 @@ def prepare(args):
             if oid in metadata:
                 raise ValueError(f"Duplicate metadata ORF: {oid}")
             metadata[oid] = row
+    membership = {}
+    member_categories = {}
+    member_rows = []
+    if args.membership_table:
+        original_seen = set()
+        for row in table_rows(args.membership_table):
+            rep = row["final_representative_ORF"]
+            if rep not in hits:
+                continue
+            original, mag = row["original_ORF"], row["MAG_ID"]
+            if not original or not mag or original in original_seen:
+                raise ValueError(f"Invalid or duplicate original ORF in membership table: {original}")
+            original_seen.add(original)
+            membership.setdefault(rep, []).append((original, mag))
+            member_categories.setdefault(rep, set()).add(row.get("category", ""))
+            member_rows.append({"representative_ORF_ID": rep, "original_ORF_ID": original, "MAG_ID": mag,
+                                "Source_category": row.get("category", ""),
+                                "original_contig_ID": row.get("original_contig_ID", ""),
+                                "start": row.get("start", ""), "end": row.get("end", ""),
+                                "strand": row.get("strand", "")})
+        if set(membership) != set(hits):
+            raise ValueError(f"Membership missing for {len(set(hits) - set(membership))} selected representative ORFs")
+        if any(len(categories) != 1 for categories in member_categories.values()):
+            raise ValueError("Conflicting source categories for a representative ORF")
     seen, annotations = set(), []
     with (out / "CARD_MAG_ORFs.fna").open("w") as handle:
         for oid, seq in fasta_records(args.representative_fna):
@@ -95,14 +126,31 @@ def prepare(args):
                 raise ValueError(f"Invalid nucleotide sequence for {oid}")
             hit = hits[oid]
             source = metadata.get(oid, {})
+            members = membership.get(oid, [])
+            singleton = len(members) == 1
+            mags = {mag for _, mag in members}
+            source_category = source.get("Source_category", source.get("category", ""))
+            membership_category = next(iter(member_categories[oid])) if members else ""
+            if source_category and membership_category and source_category != membership_category:
+                raise ValueError(f"Conflicting source category for {oid}")
+            representative_mag = source.get("representative_MAG_ID", "")
+            if not representative_mag:
+                representative_mag = next((mag for original, mag in members if original == oid), "")
             annotations.append({
                 "ORF_ID": oid,
                 "ORF_length_bp": len(seq),
                 "Cut_Off": hit["Cut_Off"],
                 "Best_Hit_ARO": hit.get("Best_Hit_ARO", ""),
                 "ARO": hit.get("ARO", ""),
-                "Source_category": source.get("Source_category", source.get("category", "")),
-                "representative_MAG_ID": source.get("representative_MAG_ID", ""),
+                "Source_category": source_category or membership_category,
+                "representative_MAG_ID": representative_mag,
+                "MAG_ID": next(iter(mags)) if len(mags) == 1 else "",
+                "original_ORF_ID": members[0][0] if singleton else "",
+                "original_ORF_count": len(members),
+                "member_MAG_count": len(mags),
+                "MAG_assignment": ("unique_original_ORF" if singleton else
+                                   "unique_MAG_cluster" if len(mags) == 1 else
+                                   "multiple_MAG_cluster" if members else "membership_not_supplied"),
             })
             handle.write(f">{oid}\n")
             for pos in range(0, len(seq), 80):
@@ -111,6 +159,8 @@ def prepare(args):
     if missing:
         raise ValueError(f"RGI hit ORFs absent from nucleotide FASTA: {len(missing)} (e.g. {min(missing)})")
     write_table(out / "CARD_MAG_ORF_annotation.tsv", list(annotations[0]), annotations)
+    if args.membership_table:
+        write_table(out / "CARD_MAG_ORF_membership.tsv", list(member_rows[0]), member_rows)
     print(f"Prepared {len(annotations)} CARD Perfect/Strict representative ORFs in {out}")
 
 
@@ -191,8 +241,26 @@ def quantify(args):
     fields = ["sample", "nCell"] + list(annotations[0]) + ["mapped_read_mates", "total_aligned_bp", "estimated_gene_copies", "copies_per_cell"]
     write_table(out / f"{args.sample}.CARD_MAG_ORF_copies_per_cell.tsv", fields, rows)
     total = sum(float(row["copies_per_cell"]) for row in rows)
-    write_table(out / f"{args.sample}.CARD_MAG_summary.tsv", ["sample", "nCell", "CARD_MAG_ORFs", "CARD_MAG_total_copies_per_cell"],
-                [{"sample": args.sample, "nCell": format(cell, ".17g"), "CARD_MAG_ORFs": len(rows), "CARD_MAG_total_copies_per_cell": format(total, ".17g")}])
+    by_mag = {}
+    for row in rows:
+        mag = row["MAG_ID"]
+        if mag:
+            count, amount = by_mag.get(mag, (0, 0.0))
+            by_mag[mag] = (count + 1, amount + float(row["copies_per_cell"]))
+    write_table(out / f"{args.sample}.CARD_MAG_by_MAG.tsv",
+                ["sample", "MAG_ID", "representative_ARG_ORFs", "ARG_copies_per_cell"],
+                ({"sample": args.sample, "MAG_ID": mag, "representative_ARG_ORFs": count,
+                  "ARG_copies_per_cell": format(amount, ".17g")}
+                 for mag, (count, amount) in sorted(by_mag.items())))
+    assigned = sum(amount for _, amount in by_mag.values())
+    unassigned = sum(float(row["copies_per_cell"]) for row in rows if not row["MAG_ID"])
+    write_table(out / f"{args.sample}.CARD_MAG_summary.tsv",
+                ["sample", "nCell", "CARD_MAG_ORFs", "CARD_MAG_total_copies_per_cell",
+                 "assigned_to_one_MAG_copies_per_cell", "unassigned_cluster_copies_per_cell"],
+                [{"sample": args.sample, "nCell": format(cell, ".17g"), "CARD_MAG_ORFs": len(rows),
+                  "CARD_MAG_total_copies_per_cell": format(total, ".17g"),
+                  "assigned_to_one_MAG_copies_per_cell": format(assigned, ".17g"),
+                  "unassigned_cluster_copies_per_cell": format(unassigned, ".17g")}])
     print(f"{args.sample}: {len(rows)} ORFs; total MAG ARG copies/cell = {total:.9g}")
 
 
@@ -204,6 +272,7 @@ def main():
     prep.add_argument("--rgi-table", action="append", default=[], help="RGI CARD_RGI.txt; may be repeated")
     prep.add_argument("--rgi-dir", help="Directory searched recursively for CARD_RGI.txt")
     prep.add_argument("--orf-metadata", help="Optional representative ORF annotation CSV/TSV")
+    prep.add_argument("--membership-table", help="Representative-to-original-ORF/MAG TSV or TSV.GZ from MAG workflow")
     prep.add_argument("--output-dir", required=True)
     prep.set_defaults(func=prepare)
     quant = commands.add_parser("quantify", help="Map one sample and divide ORF mean depth by its CARDOAP nCell")
