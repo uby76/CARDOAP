@@ -25,10 +25,10 @@ class MagOrfWorkflowTest(unittest.TestCase):
                 "orfC\tStrict\tARG_C\t3000003\t95\n"
             )
             with gzip.open(root / "members.tsv.gz", "wt") as handle:
-                handle.write("final_representative_ORF\tcategory\toriginal_ORF\tMAG_ID\n"
-                             "orfA\tHuman-specific\torfA\tMAG_A\n"
-                             "orfC\tShared\torfC\tMAG_C\n"
-                             "orfC\tShared\torfD\tMAG_D\n")
+                handle.write("final_representative_ORF\toriginal_ORF\tMAG_ID\n"
+                             "orfA\torfA\tMAG_A\n"
+                             "orfC\torfC\tMAG_C\n"
+                             "orfC\torfD\tMAG_D\n")
             (root / "metadata.txt").write_text("sample\tnRead\tn16S\tnCell\nS1\t100\t5\t2\nS2\t100\t5\t4\n")
             ref = root / "ref"
             subprocess.run([sys.executable, str(SCRIPT), "prepare", "--representative-fna", str(root / "representatives.fna"),

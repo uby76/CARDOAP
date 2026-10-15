@@ -3,33 +3,51 @@
 ## Complete workflow
 
 ```mermaid
-flowchart TD
-    MAG["MAG FASTA"] --> ORF["Prodigal: predict ORFs"]
-    ORF --> IDs["Assign unique MAG + original ORF IDs"]
-    IDs --> Within["CD-HIT-EST within Human and NonHuman groups: 95% identity, 90% coverage"]
-    Within --> Cross["Bidirectional cross-group comparison"]
-    Cross --> Shared["Recluster Shared ORFs"]
-    Shared --> Links["Keep representative ORF to original ORF to MAG links"]
-    Shared --> Protein["Representative ORF proteins"]
-    Protein --> RGI["CARD RGI main"]
-    RGI --> Strict["Keep Perfect and Strict hits"]
-    Strict --> DNA["Selected representative ORF DNA reference"]
+flowchart TB
+    Reads["Clean paired reads per sample"]
+    CARDDB["CARDOAP CARD protein reference: 6,059 sequences"]
+    RGIDB["CARD RGI model database"]
 
-    Reads["Clean paired reads from each sample"] --> Stage1["CARDOAP Stage 1: candidate reads and KO30 markers"]
-    Stage1 --> NCell["Sample nCell"]
-    Stage1 --> Stage2["CARDOAP Stage 2: CARD read annotation"]
-    Stage2 --> ReadResult["Read-level CARD copies per cell"]
+    subgraph ReadWorkflow["Existing CARDOAP read workflow - unchanged"]
+        Stage1["Stage 1: DIAMOND screening and KO30 cell estimate"]
+        Stage2["Stage 2: BLASTX CARD annotation"]
+        ReadOutput["Read-level ARG copies per cell"]
+        NCell["Sample nCell"]
+        Stage1 --> Stage2 --> ReadOutput
+        Stage1 --> NCell
+        NCell --> ReadOutput
+    end
 
-    Reads --> Mapping["Bowtie2: map reads to selected MAG ARG ORFs"]
-    DNA --> Mapping
-    Mapping --> Bases["Sum CIGAR M, =, X bases per representative ORF"]
-    Bases --> Length["Divide by ORF length: mean read-base depth"]
-    Length --> Normalize["Divide by the same sample's nCell"]
+    subgraph MAGWorkflow["Optional ARG analysis across all MAGs"]
+        MAGs["All MAG nucleotide FASTA files"]
+        Prodigal["Predict ORFs with Prodigal"]
+        UniqueID["Assign unique original ORF and MAG IDs"]
+        Cluster["Pool all ORFs; cluster at 95% identity and 90% coverage"]
+        Membership["Save representative ORF / original ORF / MAG mapping"]
+        RGI["CARD RGI main on representative proteins"]
+        Select["Keep Perfect and Strict representative ORFs"]
+        ARGRef["Build selected ORF nucleotide reference"]
+        Map["Bowtie2: map the same reads to selected ORFs"]
+        Depth["CIGAR aligned bases / ORF length"]
+        Normalize["ORF depth / sample nCell"]
+        ORFOutput["Sample by representative ARG ORF copies per cell"]
+        MAGOutput["Per-MAG summary only for uniquely assignable clusters"]
+        Ambiguous["Cross-MAG clusters remain unassigned"]
+        MAGs --> Prodigal --> UniqueID --> Cluster
+        Cluster --> Membership
+        Cluster --> RGI --> Select --> ARGRef --> Map --> Depth --> Normalize --> ORFOutput
+        Membership --> MAGOutput
+        ORFOutput --> MAGOutput
+        Membership --> Ambiguous
+        ORFOutput --> Ambiguous
+    end
+
+    Reads --> Stage1
+    CARDDB --> Stage1
+    CARDDB --> Stage2
+    RGIDB --> RGI
+    Reads --> Map
     NCell --> Normalize
-    Normalize --> MAGResult["Sample by representative MAG ARG ORF copies per cell"]
-    Links --> Assignment["Trace original ORF IDs and MAG IDs"]
-    MAGResult --> Assignment
-    Assignment --> MAGSummary["Per-MAG summary when assignment is unambiguous"]
 ```
 
 Read-level and MAG ORF results are reported separately. A representative ORF shared by multiple MAGs remains unassigned at the MAG level; its abundance is not copied to each MAG.
@@ -179,17 +197,17 @@ database/
 
 ## MAG ARG module: CARD RGI + CARDOAP nCell
 
-This optional module quantifies ARG ORFs predicted from MAGs. It uses the **same samples'** CARDOAP Stage 1 `nCell` estimates, but its MAG ORF counts are a separate result from the read-level `normalized_cell.*` tables above. Do not add the two totals: many reads can support both analyses.
+This optional module quantifies ARG ORFs predicted from MAGs. It does not change CARDOAP's existing 6,059-sequence CARD database, Stage 1/Stage 2 read annotation, or their outputs. It uses the **same samples'** CARDOAP Stage 1 `nCell` estimates, but its MAG ORF counts are a separate result from the read-level `normalized_cell.*` tables above. Do not add the two totals: many reads can support both analyses.
 
 ```text
-MAG FASTA → Prodigal ORFs → unique MAG__ORF IDs → group-aware clustering + membership
+MAG FASTA → Prodigal ORFs → unique MAG__ORF IDs → ORF clustering + membership
           → representative proteins → CARD RGI Perfect/Strict → nucleotide ARG ORF reference
 same cleaned reads → CARDOAP read annotation → sample nCell
 same cleaned reads + nucleotide ARG ORF reference → aligned bp / ORF length / nCell
 ```
 
 1. Predict ORFs separately for every MAG with Prodigal `-p meta`, prefix each original Prodigal ORF ID with its MAG ID, and retain the original ORF–MAG mapping.
-2. Cluster nucleotide ORFs at 95% identity and 90% shorter-sequence coverage, retaining every representative–original ORF–MAG link. For the existing HumGut/NonHumGut project, use its group-aware procedure: cluster within each group, compare the two groups bidirectionally, then recluster Shared representatives. The recorded CD-HIT-EST parameters are `-c 0.95 -aS 0.90 -G 1 -g 1 -r 1 -n 10 -d 0 -l 10`; the bidirectional `cd-hit-est-2d` calls additionally use `-s2 0.0 -S2 999999`. The [recorded implementation](https://github.com/uby76/HumandnohumARGs/blob/main/scripts/01_humgut_orf_card_workflow.py) is the upstream source; CARDOAP imports its result without changing the clustering algorithm.
+2. Pool nucleotide ORFs from **all MAGs** and cluster them together at 95% identity and 90% shorter-sequence coverage, retaining every representative–original ORF–MAG link. CD-HIT-EST uses `-c 0.95 -aS 0.90 -G 1 -g 1 -r 1 -n 10 -d 0 -l 10`.
 3. Run CARD RGI main on the representative proteins using a local CARD database, and keep only `Perfect` and `Strict` matches. Preserve efflux pump hits unless a separate, documented sensitivity analysis removes them.
 4. Map each sample's original, cleaned paired reads to **one combined nucleotide reference** of the selected MAG ORFs. Count CIGAR `M`, `=`, and `X` bases of primary mapped read mates per ORF. Divide by ORF length to obtain mean read-base depth, then by that sample's CARDOAP Stage 1 `nCell` to obtain copies/cell:
 
@@ -198,21 +216,32 @@ MAG_ORF_copies_per_cell[sample, ORF]
   = total_aligned_bp[sample, ORF] / ORF_length_bp[ORF] / nCell[sample]
 ```
 
-This preserves the original [HumandnohumARGs](https://github.com/uby76/HumandnohumARGs) calculation: Bowtie2 default end-to-end alignment with `--seed 0`, excluding unmapped, secondary and supplementary alignments (SAM flag mask `2308`), with no MAPQ threshold. R1 and R2 contribute separately, so overlapping mate bases count twice. PCR duplicates are not explicitly removed. These are read-base depths, not fragment-corrected depths.
+The MAG module uses Bowtie2 default end-to-end alignment with `--seed 0`, excluding unmapped, secondary and supplementary alignments (SAM flag mask `2308`), with no MAPQ threshold. R1 and R2 contribute separately, so overlapping mate bases count twice. PCR duplicates are not explicitly removed. These are read-base depths, not fragment-corrected depths.
 
 ### Run the MAG module
 
-Install Prodigal, CD-HIT, `rgi`, Bowtie2, and samtools; use the same CARD/RGI release for all MAGs. First complete the ORF prediction, unique-ID assignment, and group-aware clustering in HumandnohumARGs. Its `reference/` directory contains `Human-specific.fna/.faa`, `NonHuman-specific.fna/.faa`, `Shared.fna/.faa`, and `representative_to_original_ORF_MAG.tsv.gz`. Import and validate these outputs:
+Install Prodigal, CD-HIT, `rgi`, Bowtie2, and samtools; use the same CARD/RGI release for all MAGs. Create `mags.tsv` with one row per MAG and paths to its uncompressed nucleotide FASTA. Relative FASTA paths are resolved from the manifest's directory:
 
-```bash
-python3 scripts/import_mag_orf_reference.py \
-  --upstream-reference-dir /path/to/07_HumGut_ORF_CARD/reference \
-  --output-dir mag_orfs
+```text
+MAG_ID	fasta
+MAG001	/path/to/MAG001.fna
+MAG002	/path/to/MAG002.fna
 ```
 
-The importer checks that each nucleotide representative has the same protein ID, that original ORF IDs are unique, and that every representative has its original ORF/MAG links. It writes combined `mag_orfs/representative.fna`, `mag_orfs/representative.faa`, and `mag_orfs/representative_to_original_ORF_MAG.tsv.gz` files. Next run RGI main on the representative proteins (repeat or parallelize for chunks if needed):
+Predict ORFs in every MAG, assign unique `MAG_ID__Prodigal_ORF_ID` identifiers, and cluster all nucleotide ORFs in one CD-HIT-EST run:
 
 ```bash
+python3 scripts/prepare_mag_orfs.py \
+  --manifest mags.tsv \
+  --output-dir mag_orfs \
+  --threads 8 \
+  --memory-mb 16000
+```
+
+The script writes `mag_orfs/representative.fna`, `mag_orfs/representative.faa`, `mag_orfs/original_ORF_metadata.tsv`, and `mag_orfs/representative_to_original_ORF_MAG.tsv.gz`. It checks that every original ORF belongs to exactly one cluster. Next run RGI main on the representative proteins (repeat or parallelize for chunks if needed). RGI uses its own local CARD model database; this step does not replace CARDOAP's read-annotation database:
+
+```bash
+mkdir -p mag_rgi
 rgi main \
   --input_sequence mag_orfs/representative.faa \
   --output_file mag_rgi/CARD_RGI \
@@ -221,7 +250,7 @@ rgi main \
   --local --clean --data wgs
 ```
 
-Make the nucleotide reference. `--rgi-dir` finds all `CARD_RGI.txt` files below the given directory. If representative ORFs were clustered, supply their original-ORF/MAG mapping with `--membership-table`. The HumandnohumARGs workflow produces `representative_to_original_ORF_MAG.tsv.gz` with the required `final_representative_ORF`, `original_ORF`, and `MAG_ID` columns. `--orf-metadata` is optional and may contain `ORF_ID`, `Source_category`, and `representative_MAG_ID` columns.
+Make the nucleotide ARG reference. `--rgi-dir` finds all `CARD_RGI.txt` files below the given directory. The membership table retains the original ORF and MAG IDs for all clustered ORFs.
 
 ```bash
 python3 scripts/mag_orf_copies_per_cell.py prepare \
@@ -247,8 +276,6 @@ python3 scripts/mag_orf_copies_per_cell.py quantify \
 ```
 
 `mag_arg_results/sample1/sample1.CARD_MAG_ORF_copies_per_cell.tsv` contains sample × representative ARG ORF aligned bases, estimated gene copies, copies/cell, and the MAG ID when it can be assigned to one MAG. `sample1.CARD_MAG_by_MAG.tsv` sums only representative ORFs whose cluster maps to one MAG. `sample1.CARD_MAG_summary.tsv` separates the assigned and unassigned copies/cell. `mag_arg_reference/CARD_MAG_ORF_annotation.tsv` records the RGI evidence; `CARD_MAG_ORF_membership.tsv` records every original ORF ID and MAG ID associated with each selected representative. To reuse an existing BAM mapped to **this exact ORF reference**, pass `--bam sample.bam` instead of the read arguments.
-
-For HumGut/NonHumGut analysis, the membership table supplies `Source_category` from its `category` column. Alternatively, provide `--orf-metadata representative_ORF_metadata.tsv` with one row per representative ORF and columns `ORF_ID`, `Source_category`, and, if available, `representative_MAG_ID`. Quantify against the same combined reference, then split the resulting ORF table by `Source_category`. Do not map the source groups separately.
 
 An RGI result belongs to the **representative ORF**, whereas `CARD_MAG_ORF_membership.tsv` traces that representative to original MAG ORF IDs. If one representative contains multiple original ORFs, its read-based abundance cannot be copied to each original ORF without double counting. When all members belong to one MAG, the abundance can be included in that MAG's summary, but no separate value is assigned to each original ORF. When members span multiple MAGs, `MAG_ID` is blank and the abundance remains in the unassigned-cluster total. A per-original-gene estimate requires a separate mapping analysis with a reference and uniquely assignable reads at that resolution.
 

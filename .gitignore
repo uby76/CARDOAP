@@ -12,3 +12,7 @@ test_output/
 .DS_Store
 __pycache__/
 *.pyc
+mag_orfs/
+mag_rgi/
+mag_arg_reference/
+mag_arg_results/
